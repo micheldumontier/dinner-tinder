@@ -44,61 +44,87 @@ This logic is pure and unit-tested in `src/lib/funnel.ts` (see `funnel.test.ts`)
 ```
 src/
   api/
-    types.ts        # shared domain contract (Recipe, Member, Session, Swipe…)
-    recipeApi.ts    # MOCK external recipe API (TheMealDB-shaped). Swap for real fetch().
-    sessionApi.ts   # MOCK shared-session backend over localStorage + cross-tab
-                    #   sync (storage event + poll). Swap for REST/WebSocket.
-    identity.ts     # persists "who am I in which session" on this device
+    types.ts             # shared domain contract (Recipe, Member, Session, Swipe…)
+    recipeApi.ts         # MOCK external recipe API (TheMealDB-shaped). Swap for real fetch().
+    sessionApi.ts        # FACADE: picks the backend from VITE_API_URL
+    sessionApi.shared.ts # SessionError + listener type shared by both backends
+    sessionApi.local.ts  # MOCK backend over localStorage + cross-tab sync (default)
+    sessionApi.http.ts   # REAL backend client: REST + Server-Sent Events
+    identity.ts          # persists "who am I in which session" on this device
   lib/
-    funnel.ts       # pure, tested swipe-funnel logic   ← keep as-is for real backend
+    funnel.ts            # pure, tested swipe-funnel logic + recipeOutcomes()
+    filters.ts           # pure, tested lobby filtering (cuisine/category/veg)
   hooks/
-    useSession.ts   # live-subscribes to a session, re-renders on change
+    useSession.ts        # live-subscribes to a session, re-renders on change
   components/
-    Login.tsx       # create or join a party (name + 4-letter code)
-    Lobby.tsx       # party code + member list; host starts the game
-    SwipeCard.tsx   # one draggable card (pointer drag + LIKE/NOPE stamps)
-    SwipeDeck.tsx   # active swiper's deck + "waiting for X" screen for others
-    Results.tsx     # winner + ranked shortlist; host can "play again"
-  App.tsx           # orchestrator: routes Login → Lobby → SwipeDeck → Results
-  styles/app.css    # the dark Tinder-style theme
+    Login.tsx            # create or join a party (name + 4-letter code)
+    Lobby.tsx            # code + member list + host filter chips; host starts
+    SwipeCard.tsx        # one draggable card (pointer drag + LIKE/NOPE stamps)
+    SwipeDeck.tsx        # active swiper's deck + "waiting for X" screen for others
+    Results.tsx          # winner + shortlist + per-dish funnel breakdown
+  App.tsx                # orchestrator: routes Login → Lobby → SwipeDeck → Results
+  styles/app.css         # the dark Tinder-style theme
+server/                  # REAL backend (Express, in-memory, REST + SSE)
+  index.ts               # routes + SSE stream + in-memory store
+  sessionLogic.ts        # pure transitions, reusing src/lib/funnel.ts
+  *.test.ts              # pure-logic + HTTP integration (incl. SSE) tests
 ```
 
-Because "separate devices, shared session" is mocked with `localStorage`, the
-shared state currently syncs across **tabs of the same browser** (via the
-`storage` event), not across genuinely separate machines. Pointing
-`sessionApi.ts` at a real server is what makes it cross-device for real — the
-UI and `funnel.ts` need no changes.
+### Backend: mock vs real
+- **Default (no env):** `sessionApi.local.ts` keeps shared state in
+  `localStorage`, syncing across **tabs of the same browser** via the `storage`
+  event. Great for a single-machine demo.
+- **Real (`VITE_API_URL` set):** `sessionApi.http.ts` talks to the `server/`
+  Express app over REST, and receives live updates over **Server-Sent Events** —
+  genuinely cross-device.
+
+Both implement the **same function surface** and the server reuses the **same
+`funnel.ts`** for turn advancement, so the two can't drift. The UI and
+`funnel.ts` never change between them.
 
 ## Current status — DONE ✅
 
 - Full app implemented and working (`npm run dev`).
-- 13 funnel unit tests passing (`npm test`).
-- Clean type-check + production build (`npm run build`).
-- GitHub Actions **CI** workflow (`.github/workflows/ci.yml`): type-check + test + build on push/PR.
-- GitHub Actions **Pages deploy** workflow (`.github/workflows/deploy.yml`):
-  builds with `GITHUB_PAGES=true` (sets Vite `base` to `/dinner-tinder/`) and
-  publishes `dist/` to GitHub Pages.
+- **45 tests passing** (`npm test`): funnel + filters (pure), backend session
+  logic (pure), and an HTTP integration test that boots the server and verifies
+  the REST flow **and** the live SSE stream.
+- Clean client + server type-checks (`npm run lint`, `npm run lint:server`) and
+  production build (`npm run build`).
+- **Lobby filters** — host narrows the deck by cuisine, category, and a
+  vegetarian-only toggle before starting (`src/lib/filters.ts`).
+- **Match feedback** — Results shows a per-dish breakdown: like counts and where
+  each recipe dropped out of the funnel (`recipeOutcomes()` in `funnel.ts`).
+- **Real backend** — `server/` (Express + SSE) + the `sessionApi` facade; the
+  app goes cross-device by setting `VITE_API_URL`.
+- GitHub Actions **CI** (`.github/workflows/ci.yml`): client + server type-check,
+  test, build. **Pages deploy** (`.github/workflows/deploy.yml`) publishes the
+  client (mock backend) to GitHub Pages with `GITHUB_PAGES=true`.
 
 ### To enable the live demo
 In the repo: **Settings → Pages → Build and deployment → Source = GitHub Actions**.
 The deploy workflow then publishes to `https://micheldumontier.github.io/dinner-tinder/`.
+(The Pages build uses the mock backend; the real `server/` needs a host.)
 
 ## Suggested next steps (not yet done)
 
-1. **Real backend** — replace `sessionApi.ts` with a small server (e.g. a
-   WebSocket or Supabase/Firebase) so separate devices truly share a session.
+1. **Deploy the real backend** — host `server/` (Render/Fly/Railway/etc.) and
+   set `VITE_API_URL` so the Pages site is cross-device too. Add persistence
+   (swap the in-memory `Map` for a DB) if sessions should survive restarts.
 2. **Live recipe API** — replace `fetchRecipes()` in `recipeApi.ts` with a real
    TheMealDB call (`filter.php?c=` / `randomselection.php`).
-3. **Lobby filters** — let the host pick cuisine / dietary constraints before
-   loading the deck.
-4. **Auth** — the current "login" is just a name; add real accounts if desired.
-5. **Match feedback** — show, per recipe, how many people liked it.
+3. **Auth** — the current "login" is just a name; add real accounts if desired.
+4. **Richer feedback** — surface the per-dish breakdown live during swiping, or
+   show which member liked what.
 
 ## Run it
 
 ```bash
 npm install
-npm run dev        # open the printed URL; open a 2nd tab to play as a 2nd person
-npm test           # funnel logic tests
+npm run dev        # mock backend; open a 2nd tab to play as a 2nd person
+npm test           # all unit + backend integration tests
 npm run build      # type-check + production build
+
+# real cross-device backend:
+npm run server                                   # API on :8787
+VITE_API_URL=http://localhost:8787 npm run dev   # client → server
 ```
