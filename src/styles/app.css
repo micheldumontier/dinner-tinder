@@ -601,3 +601,149 @@ body {
   background-color: #d7b8c6;
   flex-shrink: 0;
 }
+
+/* --- lobby filters -------------------------------------------------------- */
+
+.filters h2 {
+  font-size: 1.1rem;
+  margin-bottom: 6px;
+}
+
+.filter-group {
+  margin-bottom: 12px;
+}
+
+.filter-label {
+  display: block;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chip {
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.05);
+  color: #fff;
+  border-radius: 999px;
+  padding: 7px 13px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.chip.on {
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  border-color: transparent;
+}
+
+.veg-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.veg-toggle input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--like);
+}
+
+.clear-filters {
+  margin-left: 14px;
+  font-size: 0.85rem;
+}
+
+.hint.warn {
+  color: var(--accent-2);
+}
+
+/* --- results breakdown ---------------------------------------------------- */
+
+.breakdown {
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 14px;
+  padding: 4px 14px;
+}
+
+.breakdown > summary {
+  cursor: pointer;
+  padding: 10px 0;
+  font-weight: 600;
+  color: var(--muted);
+  list-style: none;
+}
+
+.breakdown > summary::-webkit-details-marker {
+  display: none;
+}
+
+.breakdown > summary::before {
+  content: "▸ ";
+}
+
+.breakdown[open] > summary::before {
+  content: "▾ ";
+}
+
+.breakdown-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.breakdown-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.breakdown-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.breakdown-name {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.breakdown-meta {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.breakdown-status {
+  flex-shrink: 0;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.tag-survived {
+  color: var(--like);
+}
+
+.tag-out {
+  color: var(--muted);
+}
+
+.breakdown-row.survived .breakdown-name {
+  color: var(--like);
+}

@@ -76,3 +76,69 @@ export function finalResultIds(session: Session): string[] {
   const last = ordered[ordered.length - 1];
   return likedRecipeIds(session, last.id);
 }
+
+/** A per-recipe summary of how it fared through the swipe funnel. */
+export interface RecipeOutcome {
+  recipeId: string;
+  /** How many members (of those who got to see it) swiped right on it. */
+  likes: number;
+  /** How many members actually got to swipe on it before it dropped out. */
+  seenBy: number;
+  /** The member who first rejected it, ending its run; null if it survived. */
+  eliminatedByMemberId: string | null;
+  /** The turn order of the member who eliminated it; null if it survived. */
+  eliminatedAtOrder: number | null;
+  /** True if it was liked by everyone and made the final agreed set. */
+  survived: boolean;
+}
+
+/**
+ * Trace every deck recipe through the funnel: how many people liked it and,
+ * if it didn't make it, which member's swipe knocked it out.
+ *
+ * A recipe is only ever shown to a member once everyone before them liked it,
+ * so the first member (in turn order) to reject it is where it drops out.
+ */
+export function recipeOutcomes(session: Session): RecipeOutcome[] {
+  const ordered = orderedMembers(session);
+
+  // memberId -> (recipeId -> liked)
+  const swipeMap = new Map<string, Map<string, boolean>>();
+  for (const s of session.swipes) {
+    let perMember = swipeMap.get(s.memberId);
+    if (!perMember) {
+      perMember = new Map();
+      swipeMap.set(s.memberId, perMember);
+    }
+    perMember.set(s.recipeId, s.liked);
+  }
+
+  return session.recipeIds.map((recipeId) => {
+    let likes = 0;
+    let seenBy = 0;
+    let eliminatedByMemberId: string | null = null;
+    let eliminatedAtOrder: number | null = null;
+
+    for (const member of ordered) {
+      const liked = swipeMap.get(member.id)?.get(recipeId);
+      // No swipe yet → this member never reached it (game still in progress,
+      // or it was already eliminated upstream). Stop walking the chain.
+      if (liked === undefined) break;
+      seenBy += 1;
+      if (liked) {
+        likes += 1;
+      } else {
+        eliminatedByMemberId = member.id;
+        eliminatedAtOrder = member.order;
+        break;
+      }
+    }
+
+    const survived =
+      ordered.length > 0 &&
+      eliminatedByMemberId === null &&
+      seenBy === ordered.length;
+
+    return { recipeId, likes, seenBy, eliminatedByMemberId, eliminatedAtOrder, survived };
+  });
+}

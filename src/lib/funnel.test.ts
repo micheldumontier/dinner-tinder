@@ -7,6 +7,7 @@ import {
   hasFinishedTurn,
   isComplete,
   likedRecipeIds,
+  recipeOutcomes,
 } from "./funnel";
 
 function member(id: string, order: number): Member {
@@ -151,5 +152,77 @@ describe("likedRecipeIds", () => {
       swipes: swipes(["a", "r3", true], ["a", "r1", true], ["a", "r2", false]),
     });
     expect(likedRecipeIds(s, "a")).toEqual(["r1", "r3"]);
+  });
+});
+
+describe("recipeOutcomes", () => {
+  const completed = makeSession({
+    phase: "results",
+    currentTurnIndex: 3,
+    swipes: swipes(
+      ["a", "r1", true],
+      ["a", "r2", true],
+      ["a", "r3", true],
+      ["a", "r4", false],
+      ["b", "r1", true],
+      ["b", "r2", true],
+      ["b", "r3", false],
+      ["c", "r1", true],
+      ["c", "r2", false],
+    ),
+  });
+
+  it("reports one outcome per deck recipe, in deck order", () => {
+    expect(recipeOutcomes(completed).map((o) => o.recipeId)).toEqual([
+      "r1",
+      "r2",
+      "r3",
+      "r4",
+    ]);
+  });
+
+  it("marks the survivor that everyone liked", () => {
+    const r1 = recipeOutcomes(completed).find((o) => o.recipeId === "r1")!;
+    expect(r1.survived).toBe(true);
+    expect(r1.likes).toBe(3);
+    expect(r1.seenBy).toBe(3);
+    expect(r1.eliminatedByMemberId).toBeNull();
+  });
+
+  it("records who knocked out a recipe and stops counting after", () => {
+    // r2: liked by a and b, rejected by c (turn 2).
+    const r2 = recipeOutcomes(completed).find((o) => o.recipeId === "r2")!;
+    expect(r2.survived).toBe(false);
+    expect(r2.likes).toBe(2);
+    expect(r2.seenBy).toBe(3);
+    expect(r2.eliminatedByMemberId).toBe("c");
+    expect(r2.eliminatedAtOrder).toBe(2);
+
+    // r3: liked by a, rejected by b (turn 1); c never saw it.
+    const r3 = recipeOutcomes(completed).find((o) => o.recipeId === "r3")!;
+    expect(r3.likes).toBe(1);
+    expect(r3.seenBy).toBe(2);
+    expect(r3.eliminatedByMemberId).toBe("b");
+
+    // r4: rejected by a (turn 0) right away.
+    const r4 = recipeOutcomes(completed).find((o) => o.recipeId === "r4")!;
+    expect(r4.likes).toBe(0);
+    expect(r4.seenBy).toBe(1);
+    expect(r4.eliminatedAtOrder).toBe(0);
+  });
+
+  it("the survivors exactly match finalResultIds", () => {
+    const survivors = recipeOutcomes(completed)
+      .filter((o) => o.survived)
+      .map((o) => o.recipeId);
+    expect(survivors).toEqual(finalResultIds(completed));
+  });
+
+  it("marks nothing as survived while the game is still in progress", () => {
+    const inProgress = makeSession({
+      currentTurnIndex: 1,
+      swipes: swipes(["a", "r1", true], ["a", "r2", false], ["a", "r3", true], ["a", "r4", true]),
+    });
+    expect(recipeOutcomes(inProgress).every((o) => !o.survived)).toBe(true);
   });
 });

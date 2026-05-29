@@ -1,6 +1,6 @@
 import { useState } from "react";
-import type { Recipe, Session } from "../api/types";
-import { finalResultIds } from "../lib/funnel";
+import type { Member, Recipe, Session } from "../api/types";
+import { finalResultIds, orderedMembers, recipeOutcomes } from "../lib/funnel";
 import { playAgain } from "../api/sessionApi";
 
 interface Props {
@@ -17,6 +17,7 @@ export function Results({ session, meId, recipeIndex, onLeave }: Props) {
     .map((id) => recipeIndex.get(id))
     .filter((r): r is Recipe => Boolean(r));
   const isHost = session.hostId === meId;
+  const memberCount = orderedMembers(session).length;
 
   const top = winners[0];
 
@@ -86,6 +87,8 @@ export function Results({ session, meId, recipeIndex, onLeave }: Props) {
         </>
       )}
 
+      <FunnelBreakdown session={session} recipeIndex={recipeIndex} memberCount={memberCount} />
+
       <footer className="actions">
         {isHost ? (
           <button className="primary" onClick={handleAgain} disabled={busy} type="button">
@@ -96,5 +99,65 @@ export function Results({ session, meId, recipeIndex, onLeave }: Props) {
         )}
       </footer>
     </div>
+  );
+}
+
+// --- Per-recipe "how it went" breakdown ------------------------------------
+
+function FunnelBreakdown({
+  session,
+  recipeIndex,
+  memberCount,
+}: {
+  session: Session;
+  recipeIndex: Map<string, Recipe>;
+  memberCount: number;
+}) {
+  const memberById = new Map<string, Member>(session.members.map((m) => [m.id, m]));
+  const outcomes = recipeOutcomes(session);
+  if (outcomes.length === 0) return null;
+
+  // Survivors first, then most-liked, preserving deck order within ties.
+  const sorted = [...outcomes].sort((a, b) => {
+    if (a.survived !== b.survived) return a.survived ? -1 : 1;
+    return b.likes - a.likes;
+  });
+
+  return (
+    <details className="breakdown">
+      <summary>See how each dish did</summary>
+      <ul className="breakdown-list">
+        {sorted.map((o) => {
+          const recipe = recipeIndex.get(o.recipeId);
+          if (!recipe) return null;
+          const eliminatedBy = o.eliminatedByMemberId
+            ? memberById.get(o.eliminatedByMemberId)?.name
+            : null;
+          return (
+            <li key={o.recipeId} className={o.survived ? "breakdown-row survived" : "breakdown-row"}>
+              <span
+                className="runner-thumb"
+                style={{ backgroundImage: `url(${recipe.thumbnail})` }}
+              />
+              <span className="breakdown-main">
+                <span className="breakdown-name">{recipe.name}</span>
+                <span className="breakdown-meta">
+                  ♥ {o.likes}/{memberCount} liked
+                </span>
+              </span>
+              <span className="breakdown-status">
+                {o.survived ? (
+                  <span className="tag-survived">✓ winner</span>
+                ) : eliminatedBy ? (
+                  <span className="tag-out">out at {eliminatedBy}’s turn</span>
+                ) : (
+                  <span className="tag-out">not reached</span>
+                )}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    </details>
   );
 }
