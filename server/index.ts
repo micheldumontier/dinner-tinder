@@ -103,6 +103,16 @@ export function createServer() {
   );
 
   app.post(
+    "/api/sessions/:code/end",
+    handle((req, res) => {
+      const session = getOr404(req.params.code);
+      logic.endSession(session);
+      broadcast(session.code);
+      res.json(session);
+    }),
+  );
+
+  app.post(
     "/api/sessions/:code/again",
     handle((req, res) => {
       const session = getOr404(req.params.code);

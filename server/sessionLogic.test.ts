@@ -3,6 +3,7 @@ import type { Session } from "../src/api/types";
 import {
   SessionError,
   createSession,
+  endSession,
   joinSession,
   playAgain,
   startSwiping,
@@ -31,12 +32,10 @@ describe("createSession", () => {
   });
 
   it("avoids code collisions", () => {
-    const taken = new Set(["AAAA"]);
     let calls = 0;
-    const exists = (code: string) => {
+    const exists = (_code: string) => {
       calls++;
-      // Pretend the first generated code is taken once.
-      return calls === 1 ? true : taken.has(code);
+      return calls === 1; // pretend the first generated code is taken once
     };
     const { session } = createSession("Ann", exists);
     expect(session.code).toHaveLength(4);
@@ -57,21 +56,30 @@ describe("joinSession", () => {
     expect(() => joinSession(session, "bob")).toThrow(/already in this party/);
   });
 
-  it("rejects joining once swiping has started", () => {
+  it("lets late joiners in while a round is being swiped", () => {
+    const session = partyOfTwo();
+    startSwiping(session, ["r1", "r2"]);
+    const cara = joinSession(session, "Cara");
+    expect(cara.order).toBe(2);
+    expect(cara.status).toBe("active"); // can start swiping immediately
+    expect(session.members).toHaveLength(3);
+  });
+
+  it("rejects joining once the session has finished", () => {
     const session = partyOfTwo();
     startSwiping(session, ["r1"]);
-    expect(() => joinSession(session, "Cara")).toThrow(/already started/);
+    endSession(session);
+    expect(() => joinSession(session, "Cara")).toThrow(/already finished/);
   });
 });
 
 describe("startSwiping", () => {
-  it("locks the deck and activates the first member", () => {
+  it("locks the deck and makes every member active", () => {
     const session = partyOfTwo();
     startSwiping(session, ["r1", "r2"]);
     expect(session.phase).toBe("swiping");
     expect(session.recipeIds).toEqual(["r1", "r2"]);
-    expect(session.members[0].status).toBe("active");
-    expect(session.members[1].status).toBe("waiting");
+    expect(session.members.every((m) => m.status === "active")).toBe(true);
   });
 
   it("rejects an empty deck", () => {
@@ -80,32 +88,30 @@ describe("startSwiping", () => {
   });
 });
 
-describe("submitSwipe + turn advancement", () => {
-  it("advances to the next member once the active one finishes", () => {
+describe("submitSwipe (concurrent)", () => {
+  it("marks a member done once they've voted on every recipe", () => {
     const session = partyOfTwo();
     startSwiping(session, ["r1", "r2"]);
-    const [ann, bob] = session.members;
+    const [ann] = session.members;
 
     submitSwipe(session, ann.id, "r1", true);
-    expect(session.currentTurnIndex).toBe(0); // not done yet
+    expect(session.members[0].status).toBe("active");
     submitSwipe(session, ann.id, "r2", false);
-
-    expect(session.currentTurnIndex).toBe(1);
     expect(session.members[0].status).toBe("done");
-    expect(session.members[1].status).toBe("active");
-    expect(bob.status).toBe("active");
+    // Bob isn't done — session stays in swiping.
+    expect(session.phase).toBe("swiping");
   });
 
-  it("reaches results after the last member swipes their candidates", () => {
+  it("auto-ends the round once every member is done", () => {
     const session = partyOfTwo();
     startSwiping(session, ["r1", "r2"]);
     const [ann, bob] = session.members;
     submitSwipe(session, ann.id, "r1", true);
     submitSwipe(session, ann.id, "r2", true);
-    // Bob now narrows [r1, r2]
     submitSwipe(session, bob.id, "r1", true);
     submitSwipe(session, bob.id, "r2", false);
     expect(session.phase).toBe("results");
+    expect(session.members.every((m) => m.status === "done")).toBe(true);
   });
 
   it("treats re-swipes as idempotent updates", () => {
@@ -122,6 +128,32 @@ describe("submitSwipe + turn advancement", () => {
     const session = partyOfTwo();
     startSwiping(session, ["r1"]);
     expect(() => submitSwipe(session, "ghost", "r1", true)).toThrow(/Unknown member/);
+  });
+
+  it("rejects swipes once the session has ended", () => {
+    const session = partyOfTwo();
+    startSwiping(session, ["r1"]);
+    endSession(session);
+    expect(() =>
+      submitSwipe(session, session.members[0].id, "r1", true),
+    ).toThrow(/isn't accepting swipes/);
+  });
+});
+
+describe("endSession", () => {
+  it("flips a swiping session to results and marks everyone done", () => {
+    const session = partyOfTwo();
+    startSwiping(session, ["r1", "r2", "r3"]);
+    submitSwipe(session, session.members[0].id, "r1", true);
+    endSession(session);
+    expect(session.phase).toBe("results");
+    expect(session.members.every((m) => m.status === "done")).toBe(true);
+  });
+
+  it("is a no-op when called outside the swiping phase", () => {
+    const session = partyOfTwo(); // still in lobby
+    endSession(session);
+    expect(session.phase).toBe("lobby");
   });
 });
 

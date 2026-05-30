@@ -29,7 +29,7 @@ async function post<T>(path: string, body?: unknown): Promise<T> {
 }
 
 describe("HTTP backend", () => {
-  it("runs a full create → join → start → swipe → results flow", async () => {
+  it("runs a full create → join (during swipe) → swipe → end flow", async () => {
     const created = await post<{ session: Session; member: Member }>("/api/sessions", {
       hostName: "Ann",
     });
@@ -45,23 +45,24 @@ describe("HTTP backend", () => {
 
     await post(`/api/sessions/${code}/start`, { recipeIds: ["r1", "r2", "r3"] });
 
-    await post(`/api/sessions/${code}/swipe`, { memberId: ann.id, recipeId: "r1", liked: true });
-    await post(`/api/sessions/${code}/swipe`, { memberId: ann.id, recipeId: "r2", liked: false });
-    const afterAnn = await post<Session>(`/api/sessions/${code}/swipe`, {
-      memberId: ann.id,
-      recipeId: "r3",
-      liked: true,
-    });
-    expect(afterAnn.currentTurnIndex).toBe(1);
+    // Cara joins mid-swipe — she should still be admitted and active.
+    const lateJoin = await post<{ member: Member; session: Session }>(
+      `/api/sessions/${code}/join`,
+      { name: "Cara" },
+    );
+    expect(lateJoin.member.status).toBe("active");
+    const cara = lateJoin.member;
 
-    // Bob narrows Ann's picks [r1, r3].
+    // Everyone swipes concurrently, in arbitrary order.
+    await post(`/api/sessions/${code}/swipe`, { memberId: ann.id, recipeId: "r1", liked: true });
     await post(`/api/sessions/${code}/swipe`, { memberId: bob.id, recipeId: "r1", liked: true });
-    const final = await post<Session>(`/api/sessions/${code}/swipe`, {
-      memberId: bob.id,
-      recipeId: "r3",
-      liked: false,
-    });
+    await post(`/api/sessions/${code}/swipe`, { memberId: ann.id, recipeId: "r2", liked: false });
+    await post(`/api/sessions/${code}/swipe`, { memberId: cara.id, recipeId: "r1", liked: true });
+
+    // Host ends the round early.
+    const final = await post<Session>(`/api/sessions/${code}/end`);
     expect(final.phase).toBe("results");
+    expect(final.members.every((m) => m.status === "done")).toBe(true);
   });
 
   it("returns 404 for a missing session", async () => {

@@ -11,7 +11,7 @@
 // folder; the UI and funnel logic are identical for both.
 
 import type { Member, Session } from "./types";
-import { hasFinishedTurn, orderedMembers } from "../lib/funnel";
+import { hasFinishedSwiping } from "../lib/funnel";
 import { SessionError, type SessionListener as Listener } from "./sessionApi.shared";
 
 export { SessionError };
@@ -88,14 +88,13 @@ export async function createSession(
     members: [host],
     recipeIds: [],
     swipes: [],
-    currentTurnIndex: 0,
     createdAt: Date.now(),
   };
   writeSession(session);
   return delay({ session, member: host });
 }
 
-/** Join an existing session that is still in the lobby. */
+/** Join an existing session. Allowed during the lobby OR mid-swipe. */
 export async function joinSession(
   code: string,
   memberName: string,
@@ -106,8 +105,8 @@ export async function joinSession(
 
   const session = readSession(upper);
   if (!session) throw new SessionError(`No session found with code "${upper}".`);
-  if (session.phase !== "lobby") {
-    throw new SessionError("That party has already started swiping.");
+  if (session.phase === "results") {
+    throw new SessionError("That party has already finished.");
   }
   if (session.members.some((m) => m.name.toLowerCase() === name.toLowerCase())) {
     throw new SessionError(`"${name}" is already in this party.`);
@@ -117,7 +116,7 @@ export async function joinSession(
     id: randomId(),
     name,
     order: session.members.length,
-    status: "waiting",
+    status: session.phase === "swiping" ? "active" : "waiting",
   };
   session.members.push(member);
   writeSession(session);
@@ -131,10 +130,7 @@ export async function getSession(code: string): Promise<Session> {
   return delay(session);
 }
 
-/**
- * Host kicks off the game: lock in the preloaded deck, move to the swiping
- * phase, and make the first member active.
- */
+/** Host kicks off the game: lock in the preloaded deck and let everyone swipe. */
 export async function startSwiping(code: string, recipeIds: string[]): Promise<Session> {
   const session = readSession(code);
   if (!session) throw new SessionError(`No session found with code "${code}".`);
@@ -143,17 +139,14 @@ export async function startSwiping(code: string, recipeIds: string[]): Promise<S
 
   session.recipeIds = recipeIds;
   session.phase = "swiping";
-  session.currentTurnIndex = 0;
-  const ordered = orderedMembers(session);
-  ordered.forEach((m, i) => (m.status = i === 0 ? "active" : "waiting"));
+  session.members.forEach((m) => (m.status = "active"));
   writeSession(session);
   return delay(session);
 }
 
 /**
- * Record one swipe. After writing, if the active member has now swiped on
- * every recipe in their candidate set, advance the turn (and finish the game
- * once the last member is done).
+ * Record one swipe. Marks the swiper "done" once they've voted on every recipe,
+ * and auto-ends the round once everyone is done.
  */
 export async function submitSwipe(
   code: string,
@@ -163,6 +156,12 @@ export async function submitSwipe(
 ): Promise<Session> {
   const session = readSession(code);
   if (!session) throw new SessionError(`No session found with code "${code}".`);
+  if (session.phase !== "swiping") {
+    throw new SessionError("This party isn't accepting swipes right now.");
+  }
+
+  const member = session.members.find((m) => m.id === memberId);
+  if (!member) throw new SessionError("Unknown member for this session.");
 
   const existing = session.swipes.find(
     (s) => s.memberId === memberId && s.recipeId === recipeId,
@@ -173,18 +172,25 @@ export async function submitSwipe(
     session.swipes.push({ memberId, recipeId, liked });
   }
 
-  const active = orderedMembers(session)[session.currentTurnIndex];
-  if (active && active.id === memberId && hasFinishedTurn(session, active)) {
-    active.status = "done";
-    session.currentTurnIndex += 1;
-    const next = orderedMembers(session)[session.currentTurnIndex];
-    if (next) {
-      next.status = "active";
-    } else {
-      session.phase = "results";
-    }
+  if (hasFinishedSwiping(session, member)) {
+    member.status = "done";
+  }
+  if (session.members.every((m) => m.status === "done")) {
+    session.phase = "results";
   }
 
+  writeSession(session);
+  return delay(session);
+}
+
+/** Host ends the round early — flip to results with whatever's been voted on. */
+export async function endSession(code: string): Promise<Session> {
+  const session = readSession(code);
+  if (!session) throw new SessionError(`No session found with code "${code}".`);
+  if (session.phase !== "swiping") return delay(session);
+
+  session.phase = "results";
+  session.members.forEach((m) => (m.status = "done"));
   writeSession(session);
   return delay(session);
 }
@@ -196,7 +202,6 @@ export async function playAgain(code: string): Promise<Session> {
   session.phase = "lobby";
   session.swipes = [];
   session.recipeIds = [];
-  session.currentTurnIndex = 0;
   session.members.forEach((m) => (m.status = "waiting"));
   writeSession(session);
   return delay(session);

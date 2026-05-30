@@ -77,6 +77,10 @@ export async function submitSwipe(
   });
 }
 
+export async function endSession(code: string): Promise<Session> {
+  return request(`/api/sessions/${encodeURIComponent(code)}/end`, { method: "POST" });
+}
+
 export async function playAgain(code: string): Promise<Session> {
   return request(`/api/sessions/${encodeURIComponent(code)}/again`, { method: "POST" });
 }

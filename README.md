@@ -10,20 +10,21 @@ down to the meals the **whole party** is happy with.
 
 1. **Start a party** — the host gets a 4-letter party code.
 2. **Join** — everyone else enters that code on their own device (or another
-   browser tab) and adds their name.
+   browser tab) and adds their name. **Late joiners are welcome** — you can join
+   even after the host has started.
 3. **Host hits Start** — a deck of recipes is preloaded.
-4. **Swipe in turns:**
-   - The first person sees the **full deck** and swipes 👈 nope / 👉 yum.
-   - The next person sees **only what the previous person liked**, and narrows
-     it further.
-   - …and so on, down the line.
-5. **Results** — whatever survives everyone's swipes is tonight's dinner, shown
-   to the whole party. Ties? You get a ranked shortlist.
+4. **Everyone swipes at once.** Each person's queue is the full deck minus the
+   recipes they've already voted on, **prioritised** so cards others have
+   already voted on (but they haven't) come first — this drives the party
+   toward consensus faster.
+5. **End the round.** The host hits "End selection" when they're happy (or the
+   round auto-ends once every joined member has voted on every recipe).
+6. **Results.** Winners are the recipes that got at least one ♥ and zero ✕ —
+   i.e. nobody who voted on it said no. Ranked by like count.
 
 Before the host starts, they can **narrow the menu** by cuisine, category, or a
 vegetarian-only toggle. After the game, the results screen has a **per-dish
-breakdown** showing how many people liked each recipe and exactly where it
-dropped out of the funnel.
+breakdown** showing each recipe's like / dislike / didn't-vote counts.
 
 ## Run it
 

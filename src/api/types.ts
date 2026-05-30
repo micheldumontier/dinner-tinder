@@ -42,8 +42,6 @@ export interface Session {
   /** The full preloaded deck of recipe ids, in display order. */
   recipeIds: string[];
   swipes: Swipe[];
-  /** Index into the turn-ordered member list whose turn it currently is. */
-  currentTurnIndex: number;
   createdAt: number;
 }
 

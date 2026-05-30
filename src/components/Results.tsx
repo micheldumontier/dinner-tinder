@@ -1,6 +1,6 @@
 import { useState } from "react";
-import type { Member, Recipe, Session } from "../api/types";
-import { finalResultIds, orderedMembers, recipeOutcomes } from "../lib/funnel";
+import type { Recipe, Session } from "../api/types";
+import { finalResultIds, recipeOutcomes } from "../lib/funnel";
 import { playAgain } from "../api/sessionApi";
 
 interface Props {
@@ -17,7 +17,6 @@ export function Results({ session, meId, recipeIndex, onLeave }: Props) {
     .map((id) => recipeIndex.get(id))
     .filter((r): r is Recipe => Boolean(r));
   const isHost = session.hostId === meId;
-  const memberCount = orderedMembers(session).length;
 
   const top = winners[0];
 
@@ -42,7 +41,7 @@ export function Results({ session, meId, recipeIndex, onLeave }: Props) {
           <span className="empty-emoji">😅</span>
           <h2>No match!</h2>
           <p className="muted">
-            Nothing survived everyone’s swipes. Run it back with a fresh deck?
+            Nothing got a unanimous yes. Run it back with a fresh deck?
           </p>
         </div>
       ) : (
@@ -87,7 +86,7 @@ export function Results({ session, meId, recipeIndex, onLeave }: Props) {
         </>
       )}
 
-      <FunnelBreakdown session={session} recipeIndex={recipeIndex} memberCount={memberCount} />
+      <FunnelBreakdown session={session} recipeIndex={recipeIndex} />
 
       <footer className="actions">
         {isHost ? (
@@ -107,20 +106,18 @@ export function Results({ session, meId, recipeIndex, onLeave }: Props) {
 function FunnelBreakdown({
   session,
   recipeIndex,
-  memberCount,
 }: {
   session: Session;
   recipeIndex: Map<string, Recipe>;
-  memberCount: number;
 }) {
-  const memberById = new Map<string, Member>(session.members.map((m) => [m.id, m]));
   const outcomes = recipeOutcomes(session);
   if (outcomes.length === 0) return null;
 
-  // Survivors first, then most-liked, preserving deck order within ties.
+  // Survivors first, then most-liked, fewest dislikes, preserving deck order.
   const sorted = [...outcomes].sort((a, b) => {
     if (a.survived !== b.survived) return a.survived ? -1 : 1;
-    return b.likes - a.likes;
+    if (a.likes !== b.likes) return b.likes - a.likes;
+    return a.dislikes - b.dislikes;
   });
 
   return (
@@ -130,9 +127,6 @@ function FunnelBreakdown({
         {sorted.map((o) => {
           const recipe = recipeIndex.get(o.recipeId);
           if (!recipe) return null;
-          const eliminatedBy = o.eliminatedByMemberId
-            ? memberById.get(o.eliminatedByMemberId)?.name
-            : null;
           return (
             <li key={o.recipeId} className={o.survived ? "breakdown-row survived" : "breakdown-row"}>
               <span
@@ -142,16 +136,17 @@ function FunnelBreakdown({
               <span className="breakdown-main">
                 <span className="breakdown-name">{recipe.name}</span>
                 <span className="breakdown-meta">
-                  ♥ {o.likes}/{memberCount} liked
+                  ♥ {o.likes} · ✕ {o.dislikes}
+                  {o.notVoted > 0 && ` · ${o.notVoted} didn't vote`}
                 </span>
               </span>
               <span className="breakdown-status">
                 {o.survived ? (
                   <span className="tag-survived">✓ winner</span>
-                ) : eliminatedBy ? (
-                  <span className="tag-out">out at {eliminatedBy}’s turn</span>
+                ) : o.dislikes > 0 ? (
+                  <span className="tag-out">rejected</span>
                 ) : (
-                  <span className="tag-out">not reached</span>
+                  <span className="tag-out">no votes</span>
                 )}
               </span>
             </li>

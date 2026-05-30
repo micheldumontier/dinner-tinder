@@ -16,6 +16,7 @@ export const joinSession = impl.joinSession;
 export const getSession = impl.getSession;
 export const startSwiping = impl.startSwiping;
 export const submitSwipe = impl.submitSwipe;
+export const endSession = impl.endSession;
 export const playAgain = impl.playAgain;
 export const subscribe = impl.subscribe;
 

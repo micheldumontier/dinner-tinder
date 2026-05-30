@@ -1,12 +1,11 @@
 // Pure session state-machine for the real backend.
 //
 // These functions mirror sessionApi.local.ts but operate on plain Session
-// objects (the HTTP server owns the in-memory store). The genuinely tricky
-// rule — when a turn is finished and the funnel advances — is the *same*
-// funnel logic the client uses, imported directly so the two can never drift.
+// objects (the HTTP server owns the in-memory store). The funnel-related rules
+// live in src/lib/funnel.ts so the client and server can't drift.
 
 import type { Member, Session } from "../src/api/types";
-import { hasFinishedTurn, orderedMembers } from "../src/lib/funnel";
+import { hasFinishedSwiping } from "../src/lib/funnel";
 
 /** A user-facing failure (bad code, name clash, …) — maps to HTTP 400/404. */
 export class SessionError extends Error {
@@ -51,7 +50,6 @@ export function createSession(
     members: [host],
     recipeIds: [],
     swipes: [],
-    currentTurnIndex: 0,
     createdAt: Date.now(),
   };
   return { session, member: host };
@@ -60,18 +58,20 @@ export function createSession(
 export function joinSession(session: Session, memberName: string): Member {
   const name = memberName.trim();
   if (!name) throw new SessionError("Please enter your name.");
-  if (session.phase !== "lobby") {
-    throw new SessionError("That party has already started swiping.");
+  if (session.phase === "results") {
+    throw new SessionError("That party has already finished.");
   }
   if (session.members.some((m) => m.name.toLowerCase() === name.toLowerCase())) {
     throw new SessionError(`"${name}" is already in this party.`);
   }
 
+  // Lobby members are "waiting" until the host starts; mid-swipe joiners are
+  // immediately active because the round is already underway.
   const member: Member = {
     id: randomId(),
     name,
     order: session.members.length,
-    status: "waiting",
+    status: session.phase === "swiping" ? "active" : "waiting",
   };
   session.members.push(member);
   return member;
@@ -84,8 +84,7 @@ export function startSwiping(session: Session, recipeIds: string[]): void {
   }
   session.recipeIds = recipeIds;
   session.phase = "swiping";
-  session.currentTurnIndex = 0;
-  orderedMembers(session).forEach((m, i) => (m.status = i === 0 ? "active" : "waiting"));
+  session.members.forEach((m) => (m.status = "active"));
 }
 
 export function submitSwipe(
@@ -94,9 +93,14 @@ export function submitSwipe(
   recipeId: string,
   liked: boolean,
 ): void {
-  if (!session.members.some((m) => m.id === memberId)) {
+  const member = session.members.find((m) => m.id === memberId);
+  if (!member) {
     throw new SessionError("Unknown member for this session.");
   }
+  if (session.phase !== "swiping") {
+    throw new SessionError("This party isn't accepting swipes right now.");
+  }
+
   const existing = session.swipes.find(
     (s) => s.memberId === memberId && s.recipeId === recipeId,
   );
@@ -106,23 +110,25 @@ export function submitSwipe(
     session.swipes.push({ memberId, recipeId, liked });
   }
 
-  const active = orderedMembers(session)[session.currentTurnIndex];
-  if (active && active.id === memberId && hasFinishedTurn(session, active)) {
-    active.status = "done";
-    session.currentTurnIndex += 1;
-    const next = orderedMembers(session)[session.currentTurnIndex];
-    if (next) {
-      next.status = "active";
-    } else {
-      session.phase = "results";
-    }
+  if (hasFinishedSwiping(session, member)) {
+    member.status = "done";
   }
+
+  // Auto-end once every joined member has swiped on every recipe.
+  if (session.members.every((m) => m.status === "done")) {
+    session.phase = "results";
+  }
+}
+
+export function endSession(session: Session): void {
+  if (session.phase !== "swiping") return;
+  session.phase = "results";
+  session.members.forEach((m) => (m.status = "done"));
 }
 
 export function playAgain(session: Session): void {
   session.phase = "lobby";
   session.swipes = [];
   session.recipeIds = [];
-  session.currentTurnIndex = 0;
   session.members.forEach((m) => (m.status = "waiting"));
 }

@@ -1,18 +1,22 @@
-// Pure funnel logic for the sequential "swipe to narrow down dinner" game.
+// Pure logic for the concurrent "everyone swipes at once" dinner picker.
 //
-// The rules (from the product brief):
-//   - The first member to take their turn sees the full preloaded deck.
-//   - Each subsequent member only sees the recipes the *previous* member
-//     accepted (swiped right). The candidate set can only shrink.
-//   - The final result is the set of recipes the last member accepted — i.e.
-//     the recipes that survived every member's swipe in sequence.
+// The rules:
+//   - Once the host starts, every party member sees the full preloaded deck.
+//   - Each person's personal queue is the deck minus the recipes *they* have
+//     already swiped on. Late joiners catch up by seeing the same full deck.
+//   - Each queue is ordered so recipes others have already voted on come first
+//     (in deck order), followed by recipes nobody has voted on yet — this lets
+//     selections by anybody be prioritised to people who haven't voted on them.
+//   - A round ends when the host hits "End" (or, optionally, when every member
+//     has swiped on every recipe). The winners are the recipes that received
+//     at least one like and zero dislikes — i.e. nobody who voted on it said no.
 //
 // All functions here are pure and deterministic so they can be unit-tested
 // without any backend, DOM, or storage involvement.
 
 import type { Member, Session, Swipe } from "../api/types";
 
-/** Members sorted into their turn order (ascending `order`). */
+/** Members sorted into their join order (ascending `order`). */
 export function orderedMembers(session: Session): Member[] {
   return [...session.members].sort((a, b) => a.order - b.order);
 }
@@ -28,117 +32,110 @@ export function likedRecipeIds(session: Session, memberId: string): string[] {
 }
 
 /**
- * The set of recipes the member at `turnIndex` should swipe on.
+ * The recipes a given member should still swipe on, in priority order.
  *
- * Turn 0 sees the whole deck; every later turn inherits the previous member's
- * accepted set. Order follows the original deck order.
+ * Order: recipes that other members have already voted on come first (deck
+ * order within that group), then recipes nobody has voted on yet (deck order).
+ * This pushes a fresh vote toward people who haven't seen it, so the party
+ * converges on consensus faster.
  */
-export function candidateRecipeIds(session: Session, turnIndex: number): string[] {
-  if (turnIndex <= 0) {
-    return [...session.recipeIds];
-  }
-  const ordered = orderedMembers(session);
-  const previous = ordered[turnIndex - 1];
-  if (!previous) return [];
-  return likedRecipeIds(session, previous.id);
+export function candidateRecipeIds(session: Session, memberId: string): string[] {
+  const mySwiped = new Set(
+    session.swipes.filter((s) => s.memberId === memberId).map((s) => s.recipeId),
+  );
+  const votedByOthers = new Set(
+    session.swipes
+      .filter((s) => s.memberId !== memberId)
+      .map((s) => s.recipeId),
+  );
+
+  const remaining = session.recipeIds.filter((id) => !mySwiped.has(id));
+  const prioritised = remaining.filter((id) => votedByOthers.has(id));
+  const fresh = remaining.filter((id) => !votedByOthers.has(id));
+  return [...prioritised, ...fresh];
 }
 
-/** Has the given member swiped on every recipe in their candidate set? */
-export function hasFinishedTurn(session: Session, member: Member): boolean {
-  const candidates = candidateRecipeIds(session, member.order);
+/** Has the given member voted on every recipe in the deck? */
+export function hasFinishedSwiping(session: Session, member: Member): boolean {
   const swiped = new Set(
     session.swipes.filter((s) => s.memberId === member.id).map((s) => s.recipeId),
   );
-  return candidates.every((id) => swiped.has(id));
+  return session.recipeIds.every((id) => swiped.has(id));
 }
 
-/** The member whose turn it currently is, or `undefined` once everyone is done. */
-export function currentMember(session: Session): Member | undefined {
-  return orderedMembers(session)[session.currentTurnIndex];
-}
-
-/** True once every member has taken their turn. */
+/** True once the session has moved to the results phase. */
 export function isComplete(session: Session): boolean {
-  return session.currentTurnIndex >= session.members.length;
+  return session.phase === "results";
 }
 
 /**
- * The final agreed-upon recipes: what the last member accepted.
- *
- * Returns an empty array if the funnel collapsed to nothing (someone rejected
- * everything) or the game isn't complete yet.
+ * Winning recipes: ones at least one member liked and nobody who voted on
+ * them rejected. Sorted by like count (desc), ties broken by original deck
+ * order. Returns an empty array if no recipes qualify.
  */
 export function finalResultIds(session: Session): string[] {
   if (!isComplete(session) || session.members.length === 0) {
     return [];
   }
-  const ordered = orderedMembers(session);
-  const last = ordered[ordered.length - 1];
-  return likedRecipeIds(session, last.id);
+
+  const counts = countsByRecipe(session);
+  return session.recipeIds.filter((id) => {
+    const c = counts.get(id);
+    return c !== undefined && c.likes > 0 && c.dislikes === 0;
+  }).sort((a, b) => {
+    const la = counts.get(a)?.likes ?? 0;
+    const lb = counts.get(b)?.likes ?? 0;
+    if (la !== lb) return lb - la;
+    return session.recipeIds.indexOf(a) - session.recipeIds.indexOf(b);
+  });
 }
 
-/** A per-recipe summary of how it fared through the swipe funnel. */
+interface RecipeCounts {
+  likes: number;
+  dislikes: number;
+}
+
+function countsByRecipe(session: Session): Map<string, RecipeCounts> {
+  const counts = new Map<string, RecipeCounts>();
+  for (const id of session.recipeIds) counts.set(id, { likes: 0, dislikes: 0 });
+  for (const s of session.swipes) {
+    const c = counts.get(s.recipeId);
+    if (!c) continue;
+    if (s.liked) c.likes += 1;
+    else c.dislikes += 1;
+  }
+  return counts;
+}
+
+/** A per-recipe summary of how it fared this round. */
 export interface RecipeOutcome {
   recipeId: string;
-  /** How many members (of those who got to see it) swiped right on it. */
+  /** Members who swiped right on it. */
   likes: number;
-  /** How many members actually got to swipe on it before it dropped out. */
-  seenBy: number;
-  /** The member who first rejected it, ending its run; null if it survived. */
-  eliminatedByMemberId: string | null;
-  /** The turn order of the member who eliminated it; null if it survived. */
-  eliminatedAtOrder: number | null;
-  /** True if it was liked by everyone and made the final agreed set. */
+  /** Members who swiped left on it. */
+  dislikes: number;
+  /** Members who haven't swiped on it at all. */
+  notVoted: number;
+  /** True if it survived (at least one like, no dislikes). */
   survived: boolean;
 }
 
 /**
- * Trace every deck recipe through the funnel: how many people liked it and,
- * if it didn't make it, which member's swipe knocked it out.
- *
- * A recipe is only ever shown to a member once everyone before them liked it,
- * so the first member (in turn order) to reject it is where it drops out.
+ * Per-recipe breakdown: like / dislike / not-voted counts and whether it
+ * survived (no dislikes and at least one like).
  */
 export function recipeOutcomes(session: Session): RecipeOutcome[] {
-  const ordered = orderedMembers(session);
-
-  // memberId -> (recipeId -> liked)
-  const swipeMap = new Map<string, Map<string, boolean>>();
-  for (const s of session.swipes) {
-    let perMember = swipeMap.get(s.memberId);
-    if (!perMember) {
-      perMember = new Map();
-      swipeMap.set(s.memberId, perMember);
-    }
-    perMember.set(s.recipeId, s.liked);
-  }
-
+  const memberCount = session.members.length;
+  const counts = countsByRecipe(session);
   return session.recipeIds.map((recipeId) => {
-    let likes = 0;
-    let seenBy = 0;
-    let eliminatedByMemberId: string | null = null;
-    let eliminatedAtOrder: number | null = null;
-
-    for (const member of ordered) {
-      const liked = swipeMap.get(member.id)?.get(recipeId);
-      // No swipe yet → this member never reached it (game still in progress,
-      // or it was already eliminated upstream). Stop walking the chain.
-      if (liked === undefined) break;
-      seenBy += 1;
-      if (liked) {
-        likes += 1;
-      } else {
-        eliminatedByMemberId = member.id;
-        eliminatedAtOrder = member.order;
-        break;
-      }
-    }
-
-    const survived =
-      ordered.length > 0 &&
-      eliminatedByMemberId === null &&
-      seenBy === ordered.length;
-
-    return { recipeId, likes, seenBy, eliminatedByMemberId, eliminatedAtOrder, survived };
+    const c = counts.get(recipeId) ?? { likes: 0, dislikes: 0 };
+    const votes = c.likes + c.dislikes;
+    return {
+      recipeId,
+      likes: c.likes,
+      dislikes: c.dislikes,
+      notVoted: Math.max(0, memberCount - votes),
+      survived: c.likes > 0 && c.dislikes === 0,
+    };
   });
 }

@@ -28,14 +28,19 @@ A **Tinder-style app for choosing what to make for dinner** as a group:
 | Recipe source | **External recipe API**, mocked TheMealDB-shaped data for now |
 | Repo | Standalone public repo `micheldumontier/dinner-tinder` (extracted from a subfolder of the bioportal repo where it was first built) |
 
-## How the funnel works (the core rule)
+## How the round works (the core rule)
 
-- Turn 0 (first member) sees the **full deck**.
-- Turn N sees **only the recipes the member at turn N-1 swiped right on**. The
-  candidate set can only shrink.
-- The **final result** = the recipes the **last** member accepted (i.e. those
-  that survived every member's swipe in sequence). Ties produce a ranked
-  shortlist; if the funnel collapses to nothing, the UI says "no match".
+- Once the host hits Start, **everyone swipes concurrently** — there are no
+  turns. Late joiners are admitted mid-round and see the same full deck.
+- Each member's personal queue = the full deck minus recipes they've already
+  voted on, **prioritised** so cards others have voted on (but they haven't)
+  come first — selections by anybody surface fastest to people who haven't
+  voted on them.
+- The round ends when the **host hits "End selection"** or when every joined
+  member has voted on every recipe (auto-end).
+- **Winners** = recipes with at least one ♥ and zero ✕ (no rejections from
+  anyone who voted), ranked by like count. If nothing qualifies, the UI says
+  "no match".
 
 This logic is pure and unit-tested in `src/lib/funnel.ts` (see `funnel.test.ts`).
 

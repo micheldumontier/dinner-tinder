@@ -83,7 +83,8 @@ export function Lobby({ session, meId, recipes, recipesLoading, onLeave }: Props
           ))}
         </ol>
         <p className="hint">
-          You’ll swipe in join order. Each person narrows down the last person’s picks.
+          Everyone swipes at the same time once the host starts. Others can still
+          join after — they'll see the same deck.
         </p>
       </section>
 
