@@ -169,6 +169,20 @@ function openHostPeer(code: string): Promise<HostInstance> {
 }
 
 function attachHostHandlers(host: HostInstance) {
+  // If the host's link to the PeerJS broker drops (e.g. brief network hiccup,
+  // wifi flip), reconnect so new joiners can still find us. Without this the
+  // peer ID disappears from the broker and subsequent joins fail with
+  // peer-unavailable.
+  host.peer.on("disconnected", () => {
+    if (!host.peer.destroyed) {
+      try {
+        host.peer.reconnect();
+      } catch {
+        // ignore — peer.on("error") will surface anything serious
+      }
+    }
+  });
+
   host.peer.on("connection", (conn) => {
     host.connections.set(conn, null);
     conn.on("open", () => {
@@ -344,23 +358,42 @@ export async function joinSession(
   return result;
 }
 
+/**
+ * The PeerJS broker can return `peer-unavailable` for a host that's actually
+ * up — for example when a joiner clicks a share link a beat before the host's
+ * peer fully propagates through the broker, or after a transient broker
+ * hiccup. Retry a few times with a short backoff before declaring the session
+ * missing.
+ */
+const JOIN_MAX_ATTEMPTS = 5;
+const JOIN_RETRY_DELAY_MS = 1500;
+
 function openJoinerPeer(code: string): Promise<JoinerInstance> {
   return new Promise((resolve, reject) => {
     const peer = new Peer();
     let settled = false;
+    let attempts = 0;
+
     const fail = (err: SessionError) => {
       if (settled) return;
       settled = true;
       peer.destroy();
       reject(err);
     };
+    const succeed = (joiner: JoinerInstance) => {
+      if (settled) return;
+      settled = true;
+      resolve(joiner);
+    };
+
     const openTimeout = window.setTimeout(
       () => fail(new SessionError("Couldn't reach the PeerJS broker. Try again.")),
       PEER_OPEN_TIMEOUT_MS,
     );
 
-    peer.once("open", () => {
-      window.clearTimeout(openTimeout);
+    function tryConnect() {
+      if (settled) return;
+      attempts++;
       const conn = peer.connect(`${PEER_PREFIX}${code}`, { reliable: true });
       const ready = new Promise<void>((r) => conn.on("open", () => r()));
 
@@ -376,18 +409,7 @@ function openJoinerPeer(code: string): Promise<JoinerInstance> {
         nextReqId: 1,
       };
 
-      const connectTimeout = window.setTimeout(
-        () => fail(new SessionError(`No session found with code "${code}".`)),
-        PEER_OPEN_TIMEOUT_MS,
-      );
-
-      conn.on("open", () => {
-        window.clearTimeout(connectTimeout);
-        if (!settled) {
-          settled = true;
-          resolve(joiner);
-        }
-      });
+      conn.once("open", () => succeed(joiner));
       conn.on("data", (data: unknown) => handleJoinerMessage(joiner, data));
       conn.on("close", () => {
         joiner.pending.forEach(({ reject }) =>
@@ -395,17 +417,32 @@ function openJoinerPeer(code: string): Promise<JoinerInstance> {
         );
         joiner.pending.clear();
       });
-      conn.on("error", () => {
-        window.clearTimeout(connectTimeout);
-        fail(new SessionError(`No session found with code "${code}".`));
-      });
+      // conn.on("error") happens for a non-existent peer-id too, but it's
+      // also what peer.on("error") catches — let the peer-level handler
+      // decide whether to retry. Swallow the conn-level event so it doesn't
+      // double-fail.
+      conn.on("error", () => {});
+    }
+
+    peer.once("open", () => {
+      window.clearTimeout(openTimeout);
+      tryConnect();
     });
 
     peer.on("error", (err: { type?: string; message?: string }) => {
-      window.clearTimeout(openTimeout);
       if (err.type === "peer-unavailable") {
-        fail(new SessionError(`No session found with code "${code}".`));
+        if (attempts < JOIN_MAX_ATTEMPTS && !settled) {
+          window.setTimeout(tryConnect, JOIN_RETRY_DELAY_MS);
+          return;
+        }
+        window.clearTimeout(openTimeout);
+        fail(
+          new SessionError(
+            `Couldn't find a party with code "${code}". The host may have closed it, or just hasn't connected yet — try again in a moment.`,
+          ),
+        );
       } else {
+        window.clearTimeout(openTimeout);
         fail(new SessionError(`PeerJS error: ${err.message ?? err.type ?? "unknown"}`));
       }
     });
