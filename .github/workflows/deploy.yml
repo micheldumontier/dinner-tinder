@@ -2,7 +2,9 @@ name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      - claude/pages-only-hosting
   workflow_dispatch:
 
 # Allow one concurrent deployment, cancelling in-progress runs.
