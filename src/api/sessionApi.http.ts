@@ -10,7 +10,13 @@ import { SessionError, type SessionListener as Listener } from "./sessionApi.sha
 
 export { SessionError };
 
-const BASE = (import.meta.env.VITE_API_URL ?? "").replace(/\/+$/, "");
+// VITE_API_URL=auto → derive base URL from the page host at runtime, swapping
+// the port to the server's (default 8787). Lets one dev server serve both
+// localhost (host browser) and LAN-IP (phone) clients without rebuilding.
+const RAW = String(import.meta.env.VITE_API_URL ?? "");
+const BASE = RAW === "auto"
+  ? `${window.location.protocol}//${window.location.hostname}:${import.meta.env.VITE_API_PORT ?? "8787"}`
+  : RAW.replace(/\/+$/, "");
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response;
