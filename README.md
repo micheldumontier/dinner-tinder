@@ -44,19 +44,51 @@ npm run build        # type-check + production build
 
 ### Real cross-device play (the live backend)
 
-To have genuinely separate devices share a party, run the bundled server and
-point the client at it:
+To have genuinely separate devices share a party, run the bundled server and a
+LAN-exposed client:
 
 ```bash
 # terminal 1 — the API server (in-memory, REST + Server-Sent Events)
-npm run server                       # listens on http://localhost:8787
+npm run server                       # listens on 0.0.0.0:8787
 
-# terminal 2 — the client, talking to that server
-VITE_API_URL=http://localhost:8787 npm run dev
+# terminal 2 — the client, exposed on the LAN with an auto-derived API URL
+npm run dev:lan                      # vite --host on port 5180
 ```
 
-Now phones/laptops on the same network can join the same code and swipe in
-real time. Copy `.env.example` to `.env` to set `VITE_API_URL` permanently.
+`dev:lan` sets `VITE_API_URL=auto`, telling the client to derive the API base
+from the page's hostname at runtime. The same dev server then works for:
+
+- **Your host machine:** `http://localhost:5180/` → API at `localhost:8787`
+- **Phones on the same Wi-Fi:** `http://<your-LAN-IP>:5180/` → API at `<your-LAN-IP>:8787`
+
+Find your LAN IP with `hostname -I` (Linux/WSL) or `ipconfig` (Windows).
+
+If you'd rather pin one URL for everyone (e.g. running the client on a server),
+copy `.env.example` to `.env` and set `VITE_API_URL=http://host:port` instead.
+
+#### WSL2 caveat: opening the firewall
+
+On WSL2 with mirrored networking, phones on the LAN will get connection refused
+until you allow inbound TCP on the two ports in **both** firewalls. In an
+**elevated PowerShell**:
+
+```powershell
+# Hyper-V firewall (controls traffic into the WSL VM)
+New-NetFirewallHyperVRule -Name "WSL-DinnerTinder-Client" -DisplayName "WSL DinnerMatch Client 5180" -Direction Inbound -VMCreatorId '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}' -Protocol TCP -LocalPorts 5180
+New-NetFirewallHyperVRule -Name "WSL-DinnerTinder-Server" -DisplayName "WSL DinnerMatch Server 8787" -Direction Inbound -VMCreatorId '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}' -Protocol TCP -LocalPorts 8787
+
+# Windows Defender Firewall (controls traffic to the Windows host itself)
+New-NetFirewallRule -DisplayName "DinnerMatch Client 5180" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 5180 -Profile Private,Domain
+New-NetFirewallRule -DisplayName "DinnerMatch Server 8787" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8787 -Profile Private,Domain
+```
+
+If your Wi-Fi is classified `Public` (check with `Get-NetConnectionProfile`),
+either reclassify it (`Set-NetConnectionProfile -InterfaceAlias "Wi-Fi" -NetworkCategory Private`)
+or add `Public` to the `-Profile` list on the two `New-NetFirewallRule` calls.
+
+Also note: the Windows host **cannot** reach its own LAN IP for a service
+listening in WSL — use `localhost:5180` on the host machine and the LAN IP only
+from other devices.
 
 ## Architecture
 

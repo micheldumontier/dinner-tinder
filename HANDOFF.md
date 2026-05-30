@@ -76,7 +76,11 @@ server/                  # REAL backend (Express, in-memory, REST + SSE)
   event. Great for a single-machine demo.
 - **Real (`VITE_API_URL` set):** `sessionApi.http.ts` talks to the `server/`
   Express app over REST, and receives live updates over **Server-Sent Events** —
-  genuinely cross-device.
+  genuinely cross-device. Two values are supported:
+  - a full URL (`http://host:port`) — the client always calls that origin
+  - `auto` — derive the API origin from `window.location.hostname` at runtime,
+    swapping the port to `VITE_API_PORT` (default `8787`). Lets one dev server
+    serve both `localhost` and LAN-IP clients without rebuilding.
 
 Both implement the **same function surface** and the server reuses the **same
 `funnel.ts`** for turn advancement, so the two can't drift. The UI and
@@ -124,7 +128,16 @@ npm run dev        # mock backend; open a 2nd tab to play as a 2nd person
 npm test           # all unit + backend integration tests
 npm run build      # type-check + production build
 
-# real cross-device backend:
+# real cross-device backend (same machine):
 npm run server                                   # API on :8787
 VITE_API_URL=http://localhost:8787 npm run dev   # client → server
+
+# real cross-device backend (LAN — phones too):
+npm run server                                   # API on 0.0.0.0:8787
+npm run dev:lan                                  # client on 0.0.0.0:5180, VITE_API_URL=auto
+# host:  http://localhost:5180/    phones: http://<LAN-IP>:5180/
 ```
+
+On WSL2 you'll need to open inbound on ports 5180 + 8787 in both the
+Hyper-V firewall and Windows Defender Firewall before phones can connect —
+see the README for the PowerShell commands.
