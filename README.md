@@ -43,6 +43,32 @@ npm test             # run all unit + backend integration tests
 npm run build        # type-check + production build
 ```
 
+### Cross-device play on GitHub Pages (no server, WebRTC)
+
+The Pages-deployed bundle uses a **peer-to-peer WebRTC backend** instead of the
+Express server: the host's browser holds the canonical session state, joiners
+discover the host via the [PeerJS](https://peerjs.com/) public broker for
+signalling, and everyone talks directly over `RTCDataChannel` after that.
+
+Try it locally with the same backend:
+
+```bash
+VITE_BACKEND=webrtc npm run dev
+```
+
+Caveats of this mode:
+
+- If the **host closes their tab, the party dies** — there's nowhere else to
+  keep state.
+- On a reload (host or joiner), the live connection is lost; the app shows
+  "Loading party…" with a "Start over" link to clear identity.
+- WebRTC needs a working STUN/TURN path — corporate / school networks
+  sometimes block it. STUN comes free from PeerJS defaults; reliable TURN
+  needs a paid relay if you hit a hostile NAT.
+
+For local development with multiple tabs in one browser, the default
+**localStorage mock** still works (omit `VITE_BACKEND`).
+
 ### Real cross-device play (the live backend)
 
 To have genuinely separate devices share a party, run the bundled server and a

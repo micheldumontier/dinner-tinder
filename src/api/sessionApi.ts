@@ -1,15 +1,24 @@
 // Session API facade.
 //
-// Picks the backend at build time: if VITE_API_URL is set, the app talks to a
-// real server (REST + SSE, see sessionApi.http.ts and server/); otherwise it
-// uses the localStorage mock (sessionApi.local.ts), which syncs across tabs of
-// the same browser only. The UI imports only from here and never needs to know
-// which one is active.
+// Picks the backend at build time, in order of precedence:
+//   - VITE_BACKEND=webrtc   → peer-to-peer over the PeerJS public broker
+//   - VITE_API_URL set      → real HTTP server (REST + Server-Sent Events)
+//   - else                  → localStorage mock (cross-tab only)
+//
+// All three implement the same surface, so the UI never has to know which
+// one is active.
 
 import * as httpImpl from "./sessionApi.http";
 import * as localImpl from "./sessionApi.local";
+import * as webrtcImpl from "./sessionApi.webrtc";
 
-const impl = import.meta.env.VITE_API_URL ? httpImpl : localImpl;
+function pickImpl() {
+  if (import.meta.env.VITE_BACKEND === "webrtc") return webrtcImpl;
+  if (import.meta.env.VITE_API_URL) return httpImpl;
+  return localImpl;
+}
+
+const impl = pickImpl();
 
 export const createSession = impl.createSession;
 export const joinSession = impl.joinSession;

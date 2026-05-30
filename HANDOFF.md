@@ -51,10 +51,11 @@ src/
   api/
     types.ts             # shared domain contract (Recipe, Member, Session, Swipe…)
     recipeApi.ts         # MOCK external recipe API (TheMealDB-shaped). Swap for real fetch().
-    sessionApi.ts        # FACADE: picks the backend from VITE_API_URL
-    sessionApi.shared.ts # SessionError + listener type shared by both backends
+    sessionApi.ts        # FACADE: picks the backend from VITE_BACKEND / VITE_API_URL
+    sessionApi.shared.ts # SessionError + listener type shared by all backends
     sessionApi.local.ts  # MOCK backend over localStorage + cross-tab sync (default)
     sessionApi.http.ts   # REAL backend client: REST + Server-Sent Events
+    sessionApi.webrtc.ts # PEER-TO-PEER backend via PeerJS — used by the Pages deploy
     identity.ts          # persists "who am I in which session" on this device
   lib/
     funnel.ts            # pure, tested swipe-funnel logic + recipeOutcomes()
@@ -75,17 +76,22 @@ server/                  # REAL backend (Express, in-memory, REST + SSE)
   *.test.ts              # pure-logic + HTTP integration (incl. SSE) tests
 ```
 
-### Backend: mock vs real
+### Backend: three choices
 - **Default (no env):** `sessionApi.local.ts` keeps shared state in
   `localStorage`, syncing across **tabs of the same browser** via the `storage`
   event. Great for a single-machine demo.
-- **Real (`VITE_API_URL` set):** `sessionApi.http.ts` talks to the `server/`
+- **`VITE_API_URL` set:** `sessionApi.http.ts` talks to the `server/`
   Express app over REST, and receives live updates over **Server-Sent Events** —
   genuinely cross-device. Two values are supported:
   - a full URL (`http://host:port`) — the client always calls that origin
   - `auto` — derive the API origin from `window.location.hostname` at runtime,
     swapping the port to `VITE_API_PORT` (default `8787`). Lets one dev server
     serve both `localhost` and LAN-IP clients without rebuilding.
+- **`VITE_BACKEND=webrtc`:** `sessionApi.webrtc.ts` — peer-to-peer over the
+  PeerJS public broker, **no app-owned server at all**. The host's browser
+  holds canonical state; joiners connect via `RTCDataChannel`. This is what
+  the GitHub Pages deploy uses, so the published bundle works cross-device
+  without any backend infrastructure. See [docs/HOSTING-ON-PAGES.md](docs/HOSTING-ON-PAGES.md).
 
 Both implement the **same function surface** and the server reuses the **same
 `funnel.ts`** for turn advancement, so the two can't drift. The UI and

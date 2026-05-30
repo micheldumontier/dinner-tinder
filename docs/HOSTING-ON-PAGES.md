@@ -1,5 +1,11 @@
 # Hosting the entire app on GitHub Pages — exploration
 
+> **Status:** Option 1 (WebRTC + PeerJS) is implemented. The Pages deploy at
+> [`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml) now sets
+> `VITE_BACKEND=webrtc`, so the published bundle uses peer-to-peer instead
+> of the Express server. The adapter lives at
+> [`src/api/sessionApi.webrtc.ts`](../src/api/sessionApi.webrtc.ts).
+
 ## The constraint
 
 GitHub Pages serves **only static files**. There is no server-side compute, no

@@ -31,6 +31,10 @@ jobs:
       - name: Build for Pages
         env:
           GITHUB_PAGES: "true"
+          # Pages can't host the Express API, so use the WebRTC peer-to-peer
+          # backend: the host's browser becomes the authoritative session
+          # holder, joiners connect via the PeerJS public broker for signalling.
+          VITE_BACKEND: "webrtc"
         run: npm run build
 
       - uses: actions/upload-pages-artifact@v3
