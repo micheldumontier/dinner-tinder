@@ -367,22 +367,27 @@ export async function joinSession(
  */
 const JOIN_MAX_ATTEMPTS = 5;
 const JOIN_RETRY_DELAY_MS = 1500;
+const JOIN_ATTEMPT_TIMEOUT_MS = 4000;
 
 function openJoinerPeer(code: string): Promise<JoinerInstance> {
   return new Promise((resolve, reject) => {
     const peer = new Peer();
     let settled = false;
     let attempts = 0;
+    let activeConn: DataConnection | null = null;
+    let attemptTimer: number | null = null;
 
     const fail = (err: SessionError) => {
       if (settled) return;
       settled = true;
+      if (attemptTimer !== null) window.clearTimeout(attemptTimer);
       peer.destroy();
       reject(err);
     };
     const succeed = (joiner: JoinerInstance) => {
       if (settled) return;
       settled = true;
+      if (attemptTimer !== null) window.clearTimeout(attemptTimer);
       resolve(joiner);
     };
 
@@ -391,10 +396,33 @@ function openJoinerPeer(code: string): Promise<JoinerInstance> {
       PEER_OPEN_TIMEOUT_MS,
     );
 
+    function retryOrGiveUp() {
+      if (settled) return;
+      if (attempts < JOIN_MAX_ATTEMPTS) {
+        window.setTimeout(tryConnect, JOIN_RETRY_DELAY_MS);
+      } else {
+        fail(
+          new SessionError(
+            `Couldn't find a party with code "${code}". The host may have closed it, or just hasn't connected yet — try again in a moment.`,
+          ),
+        );
+      }
+    }
+
     function tryConnect() {
       if (settled) return;
       attempts++;
+      // Cancel any in-flight previous attempt's conn so its events don't
+      // bleed across to the new attempt.
+      if (activeConn && !activeConn.open) {
+        try {
+          activeConn.close();
+        } catch {
+          // ignore
+        }
+      }
       const conn = peer.connect(`${PEER_PREFIX}${code}`, { reliable: true });
+      activeConn = conn;
       const ready = new Promise<void>((r) => conn.on("open", () => r()));
 
       const joiner: JoinerInstance = {
@@ -409,7 +437,25 @@ function openJoinerPeer(code: string): Promise<JoinerInstance> {
         nextReqId: 1,
       };
 
-      conn.once("open", () => succeed(joiner));
+      // Safety net: if neither `open` nor a peer-level error fires within
+      // the per-attempt window, treat the attempt as failed and retry.
+      attemptTimer = window.setTimeout(() => {
+        if (settled || conn.open) return;
+        try {
+          conn.close();
+        } catch {
+          // ignore
+        }
+        retryOrGiveUp();
+      }, JOIN_ATTEMPT_TIMEOUT_MS);
+
+      conn.once("open", () => {
+        if (attemptTimer !== null) {
+          window.clearTimeout(attemptTimer);
+          attemptTimer = null;
+        }
+        succeed(joiner);
+      });
       conn.on("data", (data: unknown) => handleJoinerMessage(joiner, data));
       conn.on("close", () => {
         joiner.pending.forEach(({ reject }) =>
@@ -417,10 +463,9 @@ function openJoinerPeer(code: string): Promise<JoinerInstance> {
         );
         joiner.pending.clear();
       });
-      // conn.on("error") happens for a non-existent peer-id too, but it's
-      // also what peer.on("error") catches — let the peer-level handler
-      // decide whether to retry. Swallow the conn-level event so it doesn't
-      // double-fail.
+      // The peer-level error handler decides whether to retry on
+      // peer-unavailable. Swallow the conn-level event so it doesn't crash
+      // PeerJS's unhandled-error path.
       conn.on("error", () => {});
     }
 
@@ -431,17 +476,8 @@ function openJoinerPeer(code: string): Promise<JoinerInstance> {
 
     peer.on("error", (err: { type?: string; message?: string }) => {
       if (err.type === "peer-unavailable") {
-        if (attempts < JOIN_MAX_ATTEMPTS && !settled) {
-          window.setTimeout(tryConnect, JOIN_RETRY_DELAY_MS);
-          return;
-        }
-        window.clearTimeout(openTimeout);
-        fail(
-          new SessionError(
-            `Couldn't find a party with code "${code}". The host may have closed it, or just hasn't connected yet — try again in a moment.`,
-          ),
-        );
-      } else {
+        retryOrGiveUp();
+      } else if (!settled) {
         window.clearTimeout(openTimeout);
         fail(new SessionError(`PeerJS error: ${err.message ?? err.type ?? "unknown"}`));
       }
