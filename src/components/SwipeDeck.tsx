@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type { Recipe, Session } from "../api/types";
 import { submitSwipe } from "../api/sessionApi";
 import {
@@ -49,19 +49,34 @@ function ActiveDeck({
     [session.code, me.order, session.currentTurnIndex],
   );
 
-  // Track how many of *my* candidates I've already swiped (survives reloads).
-  const alreadySwiped = new Set(
+  // Optimistically remove a card the moment the user swipes, before the server
+  // round-trip lands. Once the session update arrives, the swipe is in
+  // session.swipes and this set is harmlessly a superset. A ref (not state)
+  // keeps successive swipes from racing each other on the same render.
+  const pendingRef = useRef<Set<string>>(new Set());
+  const [, forcePendingTick] = useState(0);
+
+  const swipedIds = new Set<string>(
     session.swipes.filter((s) => s.memberId === me.id).map((s) => s.recipeId),
   );
-  const remaining = candidates.filter((id) => !alreadySwiped.has(id));
-  const [index, setIndex] = useState(0);
+  pendingRef.current.forEach((id) => swipedIds.add(id));
+  const remaining = candidates.filter((id) => !swipedIds.has(id));
 
   const isFirstTurn = me.order === 0;
-  const liveRemaining = remaining.slice(index);
+  const totalToSwipe = candidates.length;
+  const swipedCount = totalToSwipe - remaining.length;
 
   async function handleSwipe(recipeId: string, liked: boolean) {
-    setIndex((i) => i + 1);
-    await submitSwipe(session.code, me.id, recipeId, liked);
+    pendingRef.current.add(recipeId);
+    forcePendingTick((n) => n + 1);
+    try {
+      await submitSwipe(session.code, me.id, recipeId, liked);
+    } catch (err) {
+      // Roll back the optimistic removal so the user can retry.
+      pendingRef.current.delete(recipeId);
+      forcePendingTick((n) => n + 1);
+      throw err;
+    }
   }
 
   if (candidates.length === 0) {
@@ -85,19 +100,19 @@ function ActiveDeck({
       <header className="topbar">
         <span className="topbar-title">Your turn{isFirstTurn ? "" : " — narrow it down"}</span>
         <span className="counter">
-          {Math.min(index, remaining.length)}/{remaining.length} swiped
+          {swipedCount}/{totalToSwipe} swiped
         </span>
       </header>
 
       <div className="deck">
-        {liveRemaining.length === 0 ? (
+        {remaining.length === 0 ? (
           <div className="empty-state">
             <span className="empty-emoji">✅</span>
             <h2>All done!</h2>
             <p className="muted">Saving your picks…</p>
           </div>
         ) : (
-          liveRemaining
+          remaining
             .slice(0, 3)
             .map((id, depth) => {
               const recipe = recipeIndex.get(id);
@@ -115,12 +130,12 @@ function ActiveDeck({
         )}
       </div>
 
-      {liveRemaining.length > 0 && (
+      {remaining.length > 0 && (
         <div className="swipe-buttons">
           <button
             className="circle nope"
             aria-label="Pass"
-            onClick={() => handleSwipe(liveRemaining[0], false)}
+            onClick={() => handleSwipe(remaining[0], false)}
             type="button"
           >
             ✕
@@ -128,7 +143,7 @@ function ActiveDeck({
           <button
             className="circle like"
             aria-label="Like"
-            onClick={() => handleSwipe(liveRemaining[0], true)}
+            onClick={() => handleSwipe(remaining[0], true)}
             type="button"
           >
             ♥
