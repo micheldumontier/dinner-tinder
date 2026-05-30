@@ -169,19 +169,11 @@ function openHostPeer(code: string): Promise<HostInstance> {
 }
 
 function attachHostHandlers(host: HostInstance) {
-  // If the host's link to the PeerJS broker drops (e.g. brief network hiccup,
-  // wifi flip), reconnect so new joiners can still find us. Without this the
-  // peer ID disappears from the broker and subsequent joins fail with
-  // peer-unavailable.
-  host.peer.on("disconnected", () => {
-    if (!host.peer.destroyed) {
-      try {
-        host.peer.reconnect();
-      } catch {
-        // ignore — peer.on("error") will surface anything serious
-      }
-    }
-  });
+  // Persistent error handler so an error after openHostPeer's once("error")
+  // doesn't propagate as an unhandled EventEmitter event (which in PeerJS
+  // can destroy the peer). We can't recover most errors at this level — but
+  // we can keep them from cascading into the React layer.
+  host.peer.on("error", () => {});
 
   host.peer.on("connection", (conn) => {
     host.connections.set(conn, null);
