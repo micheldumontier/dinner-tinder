@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { createSession, joinSession, SessionError } from "../api/sessionApi";
 import type { Identity } from "../api/types";
 
@@ -8,12 +8,30 @@ interface Props {
 
 type Mode = "create" | "join";
 
+/** If the URL has `?join=CODE`, pre-fill the join form with that code. */
+function readJoinCode(): string | null {
+  if (typeof window === "undefined") return null;
+  const param = new URLSearchParams(window.location.search).get("join");
+  if (!param) return null;
+  return param.trim().toUpperCase().slice(0, 4);
+}
+
 export function Login({ onJoined }: Props) {
-  const [mode, setMode] = useState<Mode>("create");
+  const initialJoinCode = readJoinCode();
+  const [mode, setMode] = useState<Mode>(initialJoinCode ? "join" : "create");
   const [name, setName] = useState("");
-  const [code, setCode] = useState("");
+  const [code, setCode] = useState(initialJoinCode ?? "");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // Strip the ?join= param from the address bar once we've consumed it, so a
+  // later reload doesn't keep forcing the join flow.
+  useEffect(() => {
+    if (!initialJoinCode || typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    url.searchParams.delete("join");
+    window.history.replaceState({}, "", url.toString());
+  }, [initialJoinCode]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();

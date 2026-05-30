@@ -1,7 +1,74 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { Recipe, Session } from "../api/types";
 import { startSwiping, SessionError } from "../api/sessionApi";
 import { orderedMembers } from "../lib/funnel";
+
+interface ShareLinkProps {
+  code: string;
+}
+
+function ShareLink({ code }: ShareLinkProps) {
+  const url = useMemo(() => {
+    const base = `${window.location.origin}${window.location.pathname}`;
+    return `${base.replace(/\/+$/, "")}/?join=${encodeURIComponent(code)}`;
+  }, [code]);
+  const [copied, setCopied] = useState(false);
+  const canNativeShare =
+    typeof navigator !== "undefined" && typeof navigator.share === "function";
+
+  useEffect(() => {
+    if (!copied) return;
+    const t = window.setTimeout(() => setCopied(false), 2000);
+    return () => window.clearTimeout(t);
+  }, [copied]);
+
+  async function handleCopy() {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+    } catch {
+      // Older browsers / insecure contexts: fall back to selecting the input.
+      const input = document.getElementById("share-link-input") as HTMLInputElement | null;
+      input?.select();
+      input?.setSelectionRange(0, url.length);
+    }
+  }
+
+  async function handleShare() {
+    try {
+      await navigator.share({
+        title: "DinnerMatch",
+        text: `Join my DinnerMatch party (code ${code})`,
+        url,
+      });
+    } catch {
+      // user cancelled or share unavailable — silently no-op
+    }
+  }
+
+  return (
+    <div className="share-link">
+      <input
+        id="share-link-input"
+        className="share-link-input"
+        readOnly
+        value={url}
+        onFocus={(e) => e.currentTarget.select()}
+        aria-label="Shareable join link"
+      />
+      <div className="share-link-actions">
+        <button type="button" className="share-btn" onClick={handleCopy}>
+          {copied ? "Copied!" : "Copy link"}
+        </button>
+        {canNativeShare && (
+          <button type="button" className="share-btn share-btn-secondary" onClick={handleShare}>
+            Share…
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
 import {
   EMPTY_FILTERS,
   availableFilterOptions,
@@ -63,6 +130,7 @@ export function Lobby({ session, meId, recipes, recipesLoading, onLeave }: Props
         <span className="code-banner-label">Party code</span>
         <span className="code-banner-value">{session.code}</span>
         <span className="code-banner-hint">Share this so others can join</span>
+        <ShareLink code={session.code} />
       </div>
 
       <section className="member-list">
