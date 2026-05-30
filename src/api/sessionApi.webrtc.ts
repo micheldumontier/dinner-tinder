@@ -299,9 +299,7 @@ function doSubmitSwipe(
   if (hasFinishedSwiping(host.session, member)) {
     member.status = "done";
   }
-  if (host.session.members.every((m) => m.status === "done")) {
-    host.session.phase = "results";
-  }
+  // No auto-end: only the host's explicit endSession() moves to results.
 }
 
 function doEndSession(host: HostInstance) {

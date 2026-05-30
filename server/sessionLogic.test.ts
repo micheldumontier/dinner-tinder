@@ -102,7 +102,7 @@ describe("submitSwipe (concurrent)", () => {
     expect(session.phase).toBe("swiping");
   });
 
-  it("auto-ends the round once every member is done", () => {
+  it("does not auto-end the round even when everyone has finished swiping", () => {
     const session = partyOfTwo();
     startSwiping(session, ["r1", "r2"]);
     const [ann, bob] = session.members;
@@ -110,7 +110,9 @@ describe("submitSwipe (concurrent)", () => {
     submitSwipe(session, ann.id, "r2", true);
     submitSwipe(session, bob.id, "r1", true);
     submitSwipe(session, bob.id, "r2", false);
-    expect(session.phase).toBe("results");
+    // The host must explicitly end the round — the last swipe never closes
+    // the door on late joiners.
+    expect(session.phase).toBe("swiping");
     expect(session.members.every((m) => m.status === "done")).toBe(true);
   });
 

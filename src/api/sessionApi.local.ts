@@ -175,9 +175,7 @@ export async function submitSwipe(
   if (hasFinishedSwiping(session, member)) {
     member.status = "done";
   }
-  if (session.members.every((m) => m.status === "done")) {
-    session.phase = "results";
-  }
+  // No auto-end: only the host's explicit endSession() moves to results.
 
   writeSession(session);
   return delay(session);

@@ -113,11 +113,10 @@ export function submitSwipe(
   if (hasFinishedSwiping(session, member)) {
     member.status = "done";
   }
-
-  // Auto-end once every joined member has swiped on every recipe.
-  if (session.members.every((m) => m.status === "done")) {
-    session.phase = "results";
-  }
+  // No auto-end: even when everyone (including the host) has finished
+  // swiping, the round stays open until the host explicitly hits "End
+  // selection". Otherwise the host's final swipe would silently close
+  // the door on late joiners.
 }
 
 export function endSession(session: Session): void {
