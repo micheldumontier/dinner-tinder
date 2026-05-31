@@ -98,6 +98,51 @@ function broadcastFromHost(host: HostInstance) {
   });
 }
 
+/**
+ * Re-register a host's peer with the broker after its socket dropped. Guarded
+ * so we only ever call `reconnect()` in the one state PeerJS allows it
+ * (disconnected but not destroyed); any stray error is swallowed by the host's
+ * no-op error handler rather than cascading into the session. Established data
+ * channels are peer-to-peer and survive a broker drop untouched — this only
+ * restores the host's discoverability for *new* joiners.
+ */
+function reconnectHostBroker(host: HostInstance) {
+  const { peer } = host;
+  if (peer.destroyed || !peer.disconnected) return;
+  try {
+    peer.reconnect();
+  } catch {
+    // ignore
+  }
+}
+
+let foregroundReconnectAttached = false;
+/**
+ * Once any host exists in this tab, reconnect every live host peer to the
+ * broker whenever the page returns to the foreground or the network comes
+ * back. This is what recovers a party after the host backgrounds the tab to
+ * share the invite link: mobile freezes a backgrounded tab, silently dropping
+ * PeerJS's socket, and the frozen tab can't react until it's resumed — so the
+ * `visibilitychange`/`focus` resume is the moment we re-register.
+ */
+function ensureForegroundReconnect() {
+  if (foregroundReconnectAttached || typeof window === "undefined") return;
+  foregroundReconnectAttached = true;
+  const reconnectAllHosts = () => {
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+      return; // wait until we're actually visible again
+    }
+    for (const inst of instances.values()) {
+      if (inst.role === "host") reconnectHostBroker(inst);
+    }
+  };
+  window.addEventListener("focus", reconnectAllHosts);
+  window.addEventListener("online", reconnectAllHosts);
+  if (typeof document !== "undefined") {
+    document.addEventListener("visibilitychange", reconnectAllHosts);
+  }
+}
+
 // --- createSession ----------------------------------------------------------
 
 export async function createSession(
@@ -174,6 +219,14 @@ function attachHostHandlers(host: HostInstance) {
   // can destroy the peer). We can't recover most errors at this level — but
   // we can keep them from cascading into the React layer.
   host.peer.on("error", () => {});
+
+  // Keep the host reachable across broker drops (e.g. a wifi flip, or the tab
+  // being suspended while the host switches apps to share the invite link).
+  // Without this the host's peer ID disappears from the broker and new guests
+  // fail with `peer-unavailable`. See reconnectHostBroker for the safety
+  // guards that avoid the cascade that got an earlier version reverted.
+  host.peer.on("disconnected", () => reconnectHostBroker(host));
+  ensureForegroundReconnect();
 
   host.peer.on("connection", (conn) => {
     host.connections.set(conn, null);
@@ -351,35 +404,53 @@ export async function joinSession(
 }
 
 /**
- * The PeerJS broker can return `peer-unavailable` for a host that's actually
- * up — for example when a joiner clicks a share link a beat before the host's
- * peer fully propagates through the broker, or after a transient broker
- * hiccup. Retry a few times with a short backoff before declaring the session
- * missing.
+ * The PeerJS broker returns `peer-unavailable` for a host it can't currently
+ * resolve — which happens not just for a genuinely-closed party, but also
+ * while the host's peer is still propagating through the broker, or while the
+ * host's tab is briefly suspended (e.g. they switched apps to share the invite
+ * link). So we keep retrying for a generous window rather than giving up after
+ * a couple of seconds: paired with the host's foreground-reconnect, this lets
+ * a guest who taps the link wait out the host's app-switch and connect the
+ * moment the host returns to DinnerMatch.
  */
-const JOIN_MAX_ATTEMPTS = 5;
-const JOIN_RETRY_DELAY_MS = 1500;
-const JOIN_ATTEMPT_TIMEOUT_MS = 4000;
+const JOIN_TOTAL_BUDGET_MS = 45_000;
+const JOIN_RETRY_DELAY_MS = 2_000;
+const JOIN_ATTEMPT_TIMEOUT_MS = 4_000;
 
 function openJoinerPeer(code: string): Promise<JoinerInstance> {
   return new Promise((resolve, reject) => {
     const peer = new Peer();
     let settled = false;
-    let attempts = 0;
     let activeConn: DataConnection | null = null;
     let attemptTimer: number | null = null;
+    let retryTimer: number | null = null;
+    const deadline = Date.now() + JOIN_TOTAL_BUDGET_MS;
+
+    const clearAttemptTimer = () => {
+      if (attemptTimer !== null) {
+        window.clearTimeout(attemptTimer);
+        attemptTimer = null;
+      }
+    };
+    const clearTimers = () => {
+      clearAttemptTimer();
+      if (retryTimer !== null) {
+        window.clearTimeout(retryTimer);
+        retryTimer = null;
+      }
+    };
 
     const fail = (err: SessionError) => {
       if (settled) return;
       settled = true;
-      if (attemptTimer !== null) window.clearTimeout(attemptTimer);
+      clearTimers();
       peer.destroy();
       reject(err);
     };
     const succeed = (joiner: JoinerInstance) => {
       if (settled) return;
       settled = true;
-      if (attemptTimer !== null) window.clearTimeout(attemptTimer);
+      clearTimers();
       resolve(joiner);
     };
 
@@ -388,24 +459,30 @@ function openJoinerPeer(code: string): Promise<JoinerInstance> {
       PEER_OPEN_TIMEOUT_MS,
     );
 
-    function retryOrGiveUp() {
-      if (settled) return;
-      if (attempts < JOIN_MAX_ATTEMPTS) {
-        window.setTimeout(tryConnect, JOIN_RETRY_DELAY_MS);
-      } else {
+    // Schedule exactly one retry (guarded against the peer-unavailable error
+    // and the per-attempt timeout both firing for the same attempt), or give
+    // up once we've exhausted the overall budget.
+    function scheduleRetry() {
+      if (settled || retryTimer !== null) return;
+      clearAttemptTimer();
+      if (Date.now() >= deadline) {
         fail(
           new SessionError(
-            `Couldn't find a party with code "${code}". The host may have closed it, or just hasn't connected yet — try again in a moment.`,
+            `Couldn't find a party with code "${code}". Make sure the host still has DinnerMatch open on their screen, then tap Join again.`,
           ),
         );
+        return;
       }
+      retryTimer = window.setTimeout(() => {
+        retryTimer = null;
+        tryConnect();
+      }, JOIN_RETRY_DELAY_MS);
     }
 
     function tryConnect() {
       if (settled) return;
-      attempts++;
-      // Cancel any in-flight previous attempt's conn so its events don't
-      // bleed across to the new attempt.
+      // Tidy up the previous attempt so its timer/handlers don't bleed over.
+      clearAttemptTimer();
       if (activeConn && !activeConn.open) {
         try {
           activeConn.close();
@@ -413,6 +490,7 @@ function openJoinerPeer(code: string): Promise<JoinerInstance> {
           // ignore
         }
       }
+
       const conn = peer.connect(`${PEER_PREFIX}${code}`, { reliable: true });
       activeConn = conn;
       const ready = new Promise<void>((r) => conn.on("open", () => r()));
@@ -429,25 +507,20 @@ function openJoinerPeer(code: string): Promise<JoinerInstance> {
         nextReqId: 1,
       };
 
-      // Safety net: if neither `open` nor a peer-level error fires within
-      // the per-attempt window, treat the attempt as failed and retry.
+      // Safety net: if neither `open` nor a peer-level error fires within the
+      // per-attempt window, treat the attempt as failed and retry.
       attemptTimer = window.setTimeout(() => {
+        attemptTimer = null;
         if (settled || conn.open) return;
         try {
           conn.close();
         } catch {
           // ignore
         }
-        retryOrGiveUp();
+        scheduleRetry();
       }, JOIN_ATTEMPT_TIMEOUT_MS);
 
-      conn.once("open", () => {
-        if (attemptTimer !== null) {
-          window.clearTimeout(attemptTimer);
-          attemptTimer = null;
-        }
-        succeed(joiner);
-      });
+      conn.once("open", () => succeed(joiner));
       conn.on("data", (data: unknown) => handleJoinerMessage(joiner, data));
       conn.on("close", () => {
         joiner.pending.forEach(({ reject }) =>
@@ -468,7 +541,7 @@ function openJoinerPeer(code: string): Promise<JoinerInstance> {
 
     peer.on("error", (err: { type?: string; message?: string }) => {
       if (err.type === "peer-unavailable") {
-        retryOrGiveUp();
+        scheduleRetry();
       } else if (!settled) {
         window.clearTimeout(openTimeout);
         fail(new SessionError(`PeerJS error: ${err.message ?? err.type ?? "unknown"}`));

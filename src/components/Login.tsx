@@ -103,8 +103,20 @@ export function Login({ onJoined }: Props) {
         {error && <p className="error">{error}</p>}
 
         <button className="primary" type="submit" disabled={busy}>
-          {busy ? "…" : mode === "create" ? "Create party" : "Join party"}
+          {busy
+            ? mode === "create"
+              ? "Creating…"
+              : "Looking for the host…"
+            : mode === "create"
+              ? "Create party"
+              : "Join party"}
         </button>
+
+        {busy && mode === "join" && (
+          <p className="hint">
+            Keep this open — make sure the host has DinnerMatch on screen too.
+          </p>
+        )}
       </form>
 
       <p className="hint">
